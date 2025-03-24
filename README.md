@@ -30,3 +30,8 @@ This project showcases practical skills in **data-driven finance**, **machine le
 2. Install required libraries:  
    ```bash
    pip install yfinance pandas numpy scikit-learn scipy matplotlib
+
+## Output
+- Predicted returns vs. actual returns for selected stocks
+- Optimal portfolio weights based on the Sharpe Ratio
+- Backtest plot showing cumulative portfolio returns
