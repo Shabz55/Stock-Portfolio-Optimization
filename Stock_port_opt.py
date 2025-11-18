@@ -1,21 +1,94 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from scipy.optimize import minimize
 import matplotlib.pyplot as plt
+import argparse
+import sys
 
-# Step 1: Fetch Stock Data
+
+from sklearn.metrics import mean_absolute_error
+
+def get_error_metrics(true_vals, pred_vals, stock):
+    mae = mean_absolute_error(true_vals, pred_vals)
+    print(f"{stock} - MAE: {mae:.4f}")
+    return mae
+
+def plot_all_predictions_grid(prediction_results, stocks, horizon):
+    num_stocks = len(stocks)
+    cols = 2
+    rows = (num_stocks + 1) // cols
+
+    plt.figure(figsize=(12, 4 * rows))
+
+    for i, stock in enumerate(stocks, 1):
+        plt.subplot(rows, cols, i)
+
+        pred_col = f"{stock} Predicted Return ({horizon} days)"
+        actual_col = f"{stock} Actual Return ({horizon} days)"
+
+        plt.plot(prediction_results[actual_col], label="Actual", linewidth=1.2)
+        plt.plot(prediction_results[pred_col], label="Predicted", linewidth=1.2)
+        plt.title(f"{stock} — Predicted vs Actual")
+        plt.xlabel("Date")
+        plt.ylabel("Return")
+        plt.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Portfolio Optimization using ML-predicted returns"
+    )
+
+    parser.add_argument(
+        "stocks",
+        nargs="+",
+        help="List of stock tickers to include in the portfolio"
+    )
+
+    parser.add_argument(
+        "--start",
+        default="2014-01-01",
+        help="Start date for historical data (default: 2014-01-01)"
+    )
+
+    parser.add_argument(
+        "--end",
+        default="2024-12-31",
+        help="End date for historical data (default: 2024-12-31)"
+    )
+
+    return parser.parse_args()
+
+# Fetch Stock Data
 def fetch_stock_data(stocks, start_date, end_date):
     """
-    Fetch stock data using yfinance.
+    Fetch adjusted close prices for the given stocks using yfinance.
+    Uses auto_adjust=True so 'Close' is already adjusted.
     """
-    data = yf.download(stocks, start=start_date, end=end_date)['Adj Close']
-    return data
+    raw = yf.download(
+        stocks,
+        start=start_date,
+        end=end_date,
+        auto_adjust=True,
+        progress=False
+    )
 
-# Step 2: Add Moving Averages as Features
-def add_moving_averages(data, windows=[5, 10, 20]):
+    
+    if isinstance(raw.columns, pd.MultiIndex):
+        prices = raw["Close"]
+    else:
+        prices = raw["Close"]
+
+    return prices
+
+# Add Moving Averages as Features
+def add_moving_averages(data, windows):
     """
     Add moving averages (SMA and EMA) for each column (stock) in the DataFrame
     using efficient batch processing.
@@ -40,23 +113,44 @@ def add_moving_averages(data, windows=[5, 10, 20]):
 
     return data
 
-# Step 3: Train Linear Regression Model
-def train_linear_regression(features, target):
-    """
-    Train a linear regression model to predict future returns using moving averages.
-    """
-    # Split data into training and testing sets
-    X_train, X_test, y_train, y_test = train_test_split(features, target, test_size=0.2, random_state=42)
-    
-    # Train the linear regression model
-    model = LinearRegression()
+def add_basic_features(data):
+    feature_frames = []
+
+    for stock in data.columns:
+        df = pd.DataFrame(index=data.index)
+
+        # Returns
+        df[f'{stock} Return_1D'] = data[stock].pct_change()
+        df[f'{stock} Return_5D'] = data[stock].pct_change(5)
+        df[f'{stock} Return_20D'] = data[stock].pct_change(20)
+
+        # Volatility
+        df[f'{stock} Volatility_20'] = data[stock].pct_change().rolling(20).std()
+
+
+        feature_frames.append(df)
+
+    full = pd.concat(feature_frames, axis=1)
+    return full
+
+# Train Linear Regression Model
+def train_model(features, target):
+    X_train, X_test, y_train, y_test = train_test_split(
+        features, target, test_size=0.2, random_state=42
+    )
+
+    model = RandomForestRegressor(
+        n_estimators=300,
+        max_depth=6,
+        random_state=42
+    )
+
     model.fit(X_train, y_train)
 
-    # Predict future returns
     predictions = model.predict(features)
     return model, predictions
 
-# Step 4: Optimize Portfolio Weights
+# Optimize Portfolio Weights
 def optimize_portfolio(predicted_returns, cov_matrix):
     """
     Optimize portfolio weights based on predicted returns and covariance matrix.
@@ -67,20 +161,20 @@ def optimize_portfolio(predicted_returns, cov_matrix):
     constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
     bounds = [(0, 1) for _ in range(num_assets)]  # No short selling
 
-    # Objective function: Negative Sharpe Ratio (to maximize Sharpe Ratio)
+    # Objective function: Negative Sharpe Ratio 
     def neg_sharpe(weights):
         portfolio_return = np.dot(weights, predicted_returns)
         portfolio_volatility = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
         return -portfolio_return / portfolio_volatility
 
-    # Initial weights (equal allocation)
+    # Initial weights
     initial_weights = np.array([1 / num_assets] * num_assets)
 
     # Run optimization
     result = minimize(neg_sharpe, initial_weights, bounds=bounds, constraints=constraints)
-    return result.x  # Optimal weights
+    return result.x  
 
-# Step 5: Backtest Portfolio
+# Backtest Portfolio
 def backtest_portfolio(stock_returns, optimal_weights):
     """
     Backtest the portfolio using optimal weights.
@@ -97,12 +191,21 @@ def backtest_portfolio(stock_returns, optimal_weights):
     plt.legend()
     plt.show()
 
-# Main Script
+
 if __name__ == "__main__":
     # Define stocks and time period
-    stocks = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA","NVDA"]
-    start_date = "2014-11-01"
-    end_date = "2024-11-01"
+    args = parse_args()
+
+    stocks = args.stocks
+    start_date = args.start
+    end_date = args.end
+
+    print(f"\nRunning portfolio optimization for: {stocks}")
+    print(f"Data from {start_date} to {end_date}\n")
+
+    #stocks = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA","NVDA"]
+    #start_date = "2014-11-01"
+    #end_date = "2024-11-01"
 
     # Fetch stock data
     stock_data = fetch_stock_data(stocks, start_date, end_date)
@@ -110,6 +213,10 @@ if __name__ == "__main__":
     # Add moving averages as features
     windows = [5, 10, 20]
     stock_data = add_moving_averages(stock_data, windows)
+
+    # Add basic features
+    extra_features = add_basic_features(stock_data)
+    stock_data = pd.concat([stock_data, extra_features], axis=1)
 
     # Create features (moving averages)
     stock_returns = stock_data.pct_change().dropna()
@@ -120,7 +227,7 @@ if __name__ == "__main__":
     features = stock_data[moving_avg_columns].dropna()
 
     # Define the prediction horizon (e.g., 5 days)
-    prediction_horizon = 20
+    prediction_horizon = 10
 
     # Create the target as the return over the next 'prediction_horizon' days
     target = (stock_data.shift(-prediction_horizon) / stock_data - 1).dropna()
@@ -136,17 +243,24 @@ if __name__ == "__main__":
     models, predicted_returns = {}, {}
     prediction_results = pd.DataFrame(index=features.index)  # To store predictions and actual returns
     for stock in stocks:
-        model, predictions = train_linear_regression(features, target[stock])
+        model, predictions = train_model(features, target[stock])
         models[stock] = model
         predicted_returns[stock] = predictions
 
         # Store predictions and actual returns for this stock
         prediction_results[f'{stock} Predicted Return ({prediction_horizon} days)'] = predictions
         prediction_results[f'{stock} Actual Return ({prediction_horizon} days)'] = target[stock]
+        # Calculate error
+        get_error_metrics(target[stock].loc[features.index], predictions, stock)
+
+        
 
     # Display predictions and actual returns
     print(f"Predictions vs Actual Returns for {prediction_horizon}-Day Horizon:")
-    print(prediction_results.tail(10))  # Display the last 10 rows of predictions and actual returns
+    # Display the last 10 rows of predictions and actual returns
+    print(prediction_results.tail(10))  
+
+    plot_all_predictions_grid(prediction_results, stocks, prediction_horizon)
 
     # Convert predicted returns to a DataFrame
     predicted_returns = pd.DataFrame(predicted_returns, index=features.index)
