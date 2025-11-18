@@ -1,5 +1,4 @@
 # Stock-Portfolio-Optimization
-# Stock Portfolio Optimization
 
 This project builds a complete machine-learning-based portfolio optimizer. It downloads historical stock data, engineers technical indicators, predicts multi-day forward returns using a Random Forest model, optimizes portfolio weights using Sharpe ratio maximization, and backtests the resulting portfolio.
 
