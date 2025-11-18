@@ -68,6 +68,9 @@ This project showcases practical skills in **data-driven finance**, **machine le
 2. Install required libraries:  
    ```bash
    pip install yfinance pandas numpy scikit-learn scipy matplotlib
+3. Run command (changable tickers and time range)
+   ```bash
+   python Portfolio_optimization.py AAPL AMZN GOOGL --start 2016-01-01 --end 2024-12-31
 
 ## Output
 - Predicted returns vs. actual returns for selected stocks
